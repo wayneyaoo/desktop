@@ -107,6 +107,13 @@ WizardStyledWindow {
         controller: root.controller
     }
 
+    CustomRequestHeadersDialog {
+        id: customRequestHeadersDialog
+        x: Math.round((root.width - width) / 2)
+        y: Math.round((root.height - height) / 2)
+        controller: root.controller
+    }
+
     Dialog {
         id: secureConnectionFailureDialog
 
@@ -301,29 +308,26 @@ WizardStyledWindow {
                 onClicked: root.controller.openSelfHostedServerGuide()
             },
 
-            Button {
-                id: proxySettingsButton
-
+            WizardFooterActionButton {
                 visible: root.controller
                     && root.controller.currentStep === AccountWizardController.ServerStep
                     && root.controller.proxySettingsAvailable
                 enabled: root.controller && !root.controller.busy
-                flat: true
                 text: qsTr("Proxy settings")
-                font.pixelSize: Style.pixelSize + 3
-                font.weight: Font.Medium
                 Layout.fillWidth: true
                 Layout.preferredWidth: 1
                 Layout.preferredHeight: Style.wizardFooterButtonHeight
                 onClicked: root.controller.openProxySettings()
+            },
 
-                MouseArea {
-                    anchors.fill: parent
-                    acceptedButtons: Qt.NoButton
-                    enabled: proxySettingsButton.enabled
-                    hoverEnabled: enabled
-                    cursorShape: Qt.PointingHandCursor
-                }
+            WizardFooterActionButton {
+                visible: root.controller && root.controller.currentStep === AccountWizardController.ServerStep
+                enabled: root.controller && !root.controller.busy
+                text: qsTr("Custom headers")
+                Layout.fillWidth: true
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: Style.wizardFooterButtonHeight
+                onClicked: customRequestHeadersDialog.open()
             },
 
             Item {

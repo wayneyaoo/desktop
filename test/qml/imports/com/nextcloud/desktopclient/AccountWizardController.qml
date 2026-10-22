@@ -72,6 +72,10 @@ QtObject {
     property string clientCertificatePassword: ""
     property string clientCertificateError: ""
     property bool clientCertificateValid: false
+    property string customRequestHeadersText: ""
+    // What submitCustomRequestHeaders() returns, so tests can reject the entered headers.
+    property string customRequestHeadersError: ""
+    property string submittedCustomRequestHeadersText: ""
 
     signal finished(int result)
     signal advancedOptionsRequested()
@@ -102,4 +106,12 @@ QtObject {
     function setAskBeforeLargeFolders(ask) {}
     function setLargeFolderThresholdMb(thresholdMb) {}
     function setAskBeforeExternalStorage(ask) {}
+
+    function submitCustomRequestHeaders(text) {
+        submittedCustomRequestHeadersText = text
+        if (customRequestHeadersError === "") {
+            customRequestHeadersText = text
+        }
+        return customRequestHeadersError
+    }
 }

@@ -44,6 +44,11 @@ public:
         controller._account->setUrl(url);
     }
 
+    static AccountPtr account(const AccountWizardController &controller)
+    {
+        return controller._account;
+    }
+
     static void setSyncMode(AccountWizardController &controller, AccountWizardController::SyncMode mode)
     {
         controller._syncMode = mode;
@@ -366,6 +371,50 @@ private Q_SLOTS:
         QCOMPARE(controller.currentStep(), AccountWizardController::ServerStep);
         QCOMPARE(controller.errorText(), QStringLiteral("Proxy settings are incomplete."));
         QCOMPARE(errorSpy.count(), 1);
+    }
+
+    void acceptsCustomRequestHeaders()
+    {
+        AccountWizardController controller;
+        QSignalSpy changedSpy(&controller, &AccountWizardController::customRequestHeadersChanged);
+
+        QCOMPARE(controller.submitCustomRequestHeaders(u"  P-Access-Token-Id : id \n\nP-Access-Token: secret"_s), QString());
+        QCOMPARE(controller.customRequestHeadersText(), u"P-Access-Token-Id: id\nP-Access-Token: secret"_s);
+        QCOMPARE(changedSpy.count(), 1);
+
+        // Submitting the same headers again changes nothing.
+        QCOMPARE(controller.submitCustomRequestHeaders(controller.customRequestHeadersText()), QString());
+        QCOMPARE(changedSpy.count(), 1);
+
+        QCOMPARE(controller.submitCustomRequestHeaders(QString()), QString());
+        QCOMPARE(controller.customRequestHeadersText(), QString());
+        QCOMPARE(changedSpy.count(), 2);
+    }
+
+    void rejectsInvalidCustomRequestHeadersAndKeepsPreviousOnes()
+    {
+        AccountWizardController controller;
+        QCOMPARE(controller.submitCustomRequestHeaders(u"P-Access-Token: secret"_s), QString());
+        QSignalSpy changedSpy(&controller, &AccountWizardController::customRequestHeadersChanged);
+
+        const auto error = controller.submitCustomRequestHeaders(u"P-Access-Token: other\nAuthorization: Basic abc"_s);
+
+        QCOMPARE(error, u"Line 2: This header is set by the client and cannot be changed."_s);
+        QCOMPARE(controller.customRequestHeadersText(), u"P-Access-Token: secret"_s);
+        QCOMPARE(changedSpy.count(), 0);
+    }
+
+    void serverCheckUsesCustomRequestHeaders()
+    {
+        AccountWizardController controller;
+        QCOMPARE(controller.submitCustomRequestHeaders(u"P-Access-Token: secret"_s), QString());
+
+        controller.setServerUrl(u"https://cloud.invalid"_s);
+        controller.submitServerUrl();
+
+        const auto account = AccountWizardControllerTestAccess::account(controller);
+        QVERIFY(account);
+        QCOMPARE(account->customRequestHeaders().toText(), u"P-Access-Token: secret"_s);
     }
 
     void validatesManualProxyConfiguration()
