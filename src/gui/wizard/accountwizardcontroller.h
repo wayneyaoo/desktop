@@ -20,6 +20,7 @@
 #include "accountfwd.h"
 #include "configfile.h"
 #include "creds/flow2auth.h"
+#include "customrequestheaders.h"
 #include "networkjobs.h"
 
 class QNetworkReply;
@@ -100,6 +101,7 @@ class AccountWizardController : public QObject
     Q_PROPERTY(QString clientCertificatePassword READ clientCertificatePassword WRITE setClientCertificatePassword NOTIFY clientCertificateChanged)
     Q_PROPERTY(QString clientCertificateError READ clientCertificateError NOTIFY clientCertificateChanged)
     Q_PROPERTY(bool clientCertificateValid READ clientCertificateValid NOTIFY clientCertificateChanged)
+    Q_PROPERTY(QString customRequestHeadersText READ customRequestHeadersText NOTIFY customRequestHeadersChanged)
 
 public:
     enum Step {
@@ -195,6 +197,9 @@ public:
     [[nodiscard]] QString clientCertificateError() const;
     [[nodiscard]] bool clientCertificateValid() const;
 
+    /** @brief The custom request headers for the new account as "Name: value" lines. */
+    [[nodiscard]] QString customRequestHeadersText() const;
+
     [[nodiscard]] static QString normalizeServerUrlInput(const QString &serverUrl, const QString &davPath = {});
 
     Q_INVOKABLE void submitServerUrl();
@@ -221,6 +226,13 @@ public:
     Q_INVOKABLE void clearClientCertificateInput();
     Q_INVOKABLE void retrySecureConnectionWithoutTls();
     Q_INVOKABLE void useClientCertificateForSecureConnection();
+
+    /**
+     * @brief Sets the custom request headers from "Name: value" lines, used from the next server check on.
+     *
+     * @return An empty string on success, otherwise why the text was rejected. The headers stay unchanged then.
+     */
+    Q_INVOKABLE QString submitCustomRequestHeaders(const QString &text);
 
 Q_SIGNALS:
     void currentStepChanged();
@@ -255,6 +267,7 @@ Q_SIGNALS:
     void clientCertificateDialogRequested();
     void secureConnectionFailed(const QString &host, bool retryHttpOnly);
     void clientCertificateChanged();
+    void customRequestHeadersChanged();
 
 private Q_SLOTS:
     void slotSystemProxyLookupDone(const QNetworkProxy &proxy);
@@ -397,6 +410,7 @@ private:
     QSslKey _clientSslKey;
     QSslCertificate _clientSslCertificate;
     QList<QSslCertificate> _clientSslCaCertificates;
+    CustomRequestHeaders _customRequestHeaders;
     QUrl _secureConnectionFailedUrl;
 };
 

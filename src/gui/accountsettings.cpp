@@ -1540,7 +1540,8 @@ void AccountSettings::slotAccountStateChanged()
             showConnectionLabel(tr("Server %1 is currently in maintenance mode.").arg(server));
             break;
         case AccountState::RedirectDetected:
-            showConnectionLabel(tr("Server %1 is currently being redirected, or your connection is behind a captive portal.").arg(server));
+            showConnectionLabel(tr("Server %1 is currently being redirected, or your connection is behind a captive portal.").arg(server),
+                                _accountState->connectionErrors());
             break;
         case AccountState::SignedOut:
             showConnectionLabel(tr("Signed out from %1.").arg(serverWithUser));

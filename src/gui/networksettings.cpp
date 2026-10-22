@@ -12,6 +12,7 @@
 #include "application.h"
 #include "configfile.h"
 #include "folderman.h"
+#include "guiutility.h"
 #include "settingspanelstyle.h"
 #include "theme.h"
 
@@ -109,6 +110,15 @@ NetworkSettings::NetworkSettings(const AccountPtr &account, QWidget *parent)
     connect(_ui->noDownloadLimitRadioButton, &QAbstractButton::clicked, this, &NetworkSettings::saveBWLimitSettings);
     connect(_ui->downloadSpinBox, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &NetworkSettings::saveBWLimitSettings);
     connect(_ui->uploadSpinBox, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &NetworkSettings::saveBWLimitSettings);
+
+    _ui->customRequestHeadersGroupBox->setVisible(_account != nullptr);
+    if (_account) {
+        Utility::customizeHintLabel(_ui->customRequestHeadersHintLabel);
+        Utility::initErrorLabel(_ui->customRequestHeadersErrorLabel);
+        loadCustomRequestHeaders();
+        connect(_account.data(), &Account::customRequestHeadersChanged, this, &NetworkSettings::loadCustomRequestHeaders);
+        connect(_ui->customRequestHeadersApplyButton, &QAbstractButton::clicked, this, &NetworkSettings::saveCustomRequestHeaders);
+    }
 }
 
 NetworkSettings::~NetworkSettings()
@@ -251,6 +261,48 @@ void NetworkSettings::saveBWLimitSettings()
     }
 
     FolderMan::instance()->setDirtyNetworkLimits(_account);
+}
+
+void NetworkSettings::loadCustomRequestHeaders()
+{
+    const auto status = _account->customRequestHeadersStatus();
+    // Editing before the stored headers were read would replace them.
+    _ui->customRequestHeadersGroupBox->setEnabled(status != Account::CustomRequestHeadersStatus::Loading);
+    _ui->customRequestHeadersTextEdit->setPlainText(_account->customRequestHeaders().toText());
+    if (status == Account::CustomRequestHeadersStatus::Unreadable) {
+        _ui->customRequestHeadersErrorLabel->setText(
+            tr("The stored headers couldn't be read from the keychain. Enter them again, or apply without headers to remove them."));
+        _ui->customRequestHeadersErrorLabel->show();
+    } else {
+        _ui->customRequestHeadersErrorLabel->hide();
+    }
+}
+
+void NetworkSettings::saveCustomRequestHeaders()
+{
+    const auto status = _account->customRequestHeadersStatus();
+    if (status == Account::CustomRequestHeadersStatus::Loading) {
+        return;
+    }
+
+    auto error = CustomRequestHeaders::ParseError::NoError;
+    auto errorLine = qsizetype{0};
+    const auto headers = CustomRequestHeaders::fromText(_ui->customRequestHeadersTextEdit->toPlainText(), &error, &errorLine);
+    if (!headers) {
+        _ui->customRequestHeadersErrorLabel->setText(Utility::customRequestHeadersErrorText(error, errorLine));
+        _ui->customRequestHeadersErrorLabel->show();
+        return;
+    }
+
+    _ui->customRequestHeadersErrorLabel->hide();
+    _ui->customRequestHeadersTextEdit->setPlainText(headers->toText());
+    // After a failed read, applying replaces the stored headers even with none.
+    if (*headers == _account->customRequestHeaders() && status == Account::CustomRequestHeadersStatus::Ready) {
+        return;
+    }
+
+    _account->setCustomRequestHeaders(*headers);
+    AccountManager::instance()->saveAccount(_account);
 }
 
 void NetworkSettings::checkEmptyProxyHost()

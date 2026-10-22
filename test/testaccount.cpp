@@ -14,8 +14,11 @@
 
 #include "account.h"
 #include "accountstate.h"
+#include "creds/dummycredentials.h"
 #include "logger.h"
 #include "syncenginetestutils.h"
+
+#include <memory>
 
 using namespace OCC;
 using namespace Qt::StringLiterals;
@@ -23,6 +26,38 @@ using namespace Qt::StringLiterals;
 class TestAccount: public QObject
 {
     Q_OBJECT
+
+private:
+    static CustomRequestHeaders customRequestHeaders(const QString &text)
+    {
+        const auto headers = CustomRequestHeaders::fromText(text);
+        Q_ASSERT(headers);
+        return headers.value_or(CustomRequestHeaders{});
+    }
+
+    //! @brief Returns the request that @p manager sends for @p request, without waiting for a response.
+    static QNetworkRequest sentRequest(QNetworkAccessManager &manager, const QNetworkRequest &request)
+    {
+        const auto reply = std::unique_ptr<QNetworkReply>(manager.get(request));
+        const auto sent = reply->request();
+        reply->abort();
+        return sent;
+    }
+
+    static QNetworkRequest sentRequest(QNetworkAccessManager &manager, const QUrl &url)
+    {
+        return sentRequest(manager, QNetworkRequest{url});
+    }
+
+    //! @brief An account whose network access manager is a real AccessManager.
+    static AccountPtr accountWithCustomRequestHeaders(const QUrl &url, const QString &headersText)
+    {
+        const auto account = Account::create();
+        account->setUrl(url);
+        account->setCustomRequestHeaders(customRequestHeaders(headersText));
+        account->setCredentials(new DummyCredentials);
+        return account;
+    }
 
 private Q_SLOTS:
     void initTestCase()
@@ -177,6 +212,65 @@ private Q_SLOTS:
         receivedPaths.sort();
         expectedPaths.sort();
         QCOMPARE_EQ(receivedPaths, expectedPaths);
+    }
+
+    void testAccount_customRequestHeaders_sentToAccountServerOnly()
+    {
+        const auto account = accountWithCustomRequestHeaders(QUrl(u"https://cloud.invalid"_s), u"P-Access-Token: secret"_s);
+        auto *const manager = account->networkAccessManager();
+
+        QCOMPARE(sentRequest(*manager, QUrl(u"https://cloud.invalid/status.php"_s)).rawHeader("P-Access-Token"_ba), "secret"_ba);
+        QVERIFY(!sentRequest(*manager, QUrl(u"https://other.invalid/status.php"_s)).hasRawHeader("P-Access-Token"_ba));
+
+        // Following a redirect to another server sends a copy of the original request.
+        auto redirected = QNetworkRequest{QUrl(u"https://other.invalid/status.php"_s)};
+        redirected.setRawHeader("P-Access-Token"_ba, "secret"_ba);
+        QVERIFY(!sentRequest(*manager, redirected).hasRawHeader("P-Access-Token"_ba));
+    }
+
+    void testAccount_customRequestHeaders_followAccountChanges()
+    {
+        const auto account = accountWithCustomRequestHeaders(QUrl(u"https://cloud.invalid"_s), u"P-Access-Token: first"_s);
+
+        account->setCustomRequestHeaders(customRequestHeaders(u"P-Access-Token: second"_s));
+        QCOMPARE(sentRequest(*account->networkAccessManager(), QUrl(u"https://cloud.invalid/"_s)).rawHeader("P-Access-Token"_ba), "second"_ba);
+
+        // A new access manager, as created when reconnecting, still sends them.
+        account->resetNetworkAccessManager();
+        QCOMPARE(sentRequest(*account->networkAccessManager(), QUrl(u"https://cloud.invalid/"_s)).rawHeader("P-Access-Token"_ba), "second"_ba);
+
+        account->setUrl(QUrl(u"https://moved.invalid"_s));
+        QVERIFY(!sentRequest(*account->networkAccessManager(), QUrl(u"https://cloud.invalid/"_s)).hasRawHeader("P-Access-Token"_ba));
+        QCOMPARE(sentRequest(*account->networkAccessManager(), QUrl(u"https://moved.invalid/"_s)).rawHeader("P-Access-Token"_ba), "second"_ba);
+
+        account->setCustomRequestHeaders({});
+        QVERIFY(!sentRequest(*account->networkAccessManager(), QUrl(u"https://moved.invalid/"_s)).hasRawHeader("P-Access-Token"_ba));
+    }
+
+    void testAccount_httpLog_redactsCustomRequestHeaderValues()
+    {
+        // A message handler is a plain function, so collect into storage it can reach without captures.
+        static QStringList messages;
+        messages.clear();
+        const auto previousHandler = qInstallMessageHandler([](QtMsgType, const QMessageLogContext &, const QString &message) {
+            messages.append(message);
+        });
+        const auto httpLoggerRule = QSet<QString>{u"sync.httplogger.info=true"_s};
+        Logger::instance()->addLogRule(httpLoggerRule);
+        const auto restoreLogging = qScopeGuard([previousHandler, httpLoggerRule] {
+            Logger::instance()->removeLogRule(httpLoggerRule);
+            qInstallMessageHandler(previousHandler);
+        });
+
+        const auto account = accountWithCustomRequestHeaders(QUrl(u"https://cloud.invalid"_s), u"P-Access-Token: secret-token-value"_s);
+        sentRequest(*account->networkAccessManager(), QUrl(u"https://cloud.invalid/status.php"_s));
+
+        const auto requestLogs = messages.filter(u"p-access-token"_s, Qt::CaseInsensitive);
+        QVERIFY(!requestLogs.isEmpty());
+        for (const auto &message : requestLogs) {
+            QVERIFY2(!message.contains(u"secret-token-value"_s), qPrintable(message));
+            QVERIFY2(message.contains(u"p-access-token: [redacted]"_s, Qt::CaseInsensitive), qPrintable(message));
+        }
     }
 };
 

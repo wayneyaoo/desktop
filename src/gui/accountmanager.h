@@ -130,6 +130,11 @@ private:
     void migrateNetworkSettings(const AccountPtr &account, const QSettings &settings);
     void removeAccountState(OCC::AccountState *account, AccountRemovalMode removalMode);
 
+    // Header names go to the settings, the full headers to the keychain. Loading needs the account id and user to be set.
+    void saveCustomRequestHeaders(const AccountPtr &account, QSettings &settings);
+    void loadCustomRequestHeaders(const AccountPtr &account, const QSettings &settings);
+    void deleteCustomRequestHeadersFromKeychain(const AccountPtr &account);
+
     bool restoreFromLegacySettings();
 
     [[nodiscard]] bool isAccountIdAvailable(const QString &id) const;

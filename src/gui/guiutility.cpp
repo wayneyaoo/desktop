@@ -190,3 +190,31 @@ void Utility::customizeHintLabel(QLabel *label)
     palette.setColor(QPalette::Text, textColor);
     label->setPalette(palette);
 }
+
+QString Utility::customRequestHeadersErrorText(const CustomRequestHeaders::ParseError error, const qsizetype line)
+{
+    switch (error) {
+    case CustomRequestHeaders::ParseError::NoError:
+        return {};
+    case CustomRequestHeaders::ParseError::MissingSeparator:
+        //: %1 is the line number of the custom request header, starting at 1
+        return QCoreApplication::translate("utility", "Line %1: Separate the header name and value with a colon, for example \"X-Token: value\".").arg(line);
+    case CustomRequestHeaders::ParseError::InvalidName:
+        //: %1 is the line number of the custom request header, starting at 1
+        return QCoreApplication::translate("utility", "Line %1: The header name contains characters that are not allowed.").arg(line);
+    case CustomRequestHeaders::ParseError::InvalidValue:
+        //: %1 is the line number of the custom request header, starting at 1
+        return QCoreApplication::translate("utility", "Line %1: The header value must not be empty and may only contain printable ASCII characters.").arg(line);
+    case CustomRequestHeaders::ParseError::ReservedName:
+        //: %1 is the line number of the custom request header, starting at 1
+        return QCoreApplication::translate("utility", "Line %1: This header is set by the client and cannot be changed.").arg(line);
+    case CustomRequestHeaders::ParseError::DuplicateName:
+        //: %1 is the line number of the custom request header, starting at 1
+        return QCoreApplication::translate("utility", "Line %1: This header is already set on an earlier line.").arg(line);
+    case CustomRequestHeaders::ParseError::TooLarge:
+        //: %1 is the maximum number of characters for all custom request headers together, for example 2048
+        return QCoreApplication::translate("utility", "The headers are too long. They may contain at most %1 characters in total.")
+            .arg(CustomRequestHeaders::MaximumSize);
+    }
+    Q_UNREACHABLE_RETURN({});
+}

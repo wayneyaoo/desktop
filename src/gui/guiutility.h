@@ -14,6 +14,7 @@
 #include <functional>
 
 #include "common/pinstate.h"
+#include "customrequestheaders.h"
 
 class QLabel;
 
@@ -53,6 +54,13 @@ namespace Utility {
 
     /** Dim a hint label while preserving its current palette. */
     void customizeHintLabel(QLabel *label);
+
+    /**
+     * @brief Translated explanation why custom request header text was rejected.
+     *
+     * @param line The 1-based line of the rejected header, as reported by CustomRequestHeaders::fromText().
+     */
+    QString customRequestHeadersErrorText(CustomRequestHeaders::ParseError error, qsizetype line);
 
 } // namespace Utility
 } // namespace OCC

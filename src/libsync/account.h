@@ -13,6 +13,7 @@
 #include "clientstatusreporting.h"
 #include "common/utility.h"
 #include "common/vfs.h"
+#include "customrequestheaders.h"
 #include "settings/managedproxysettings.h"
 #include "settings/servermanagedsettings.h"
 #include "syncfileitem.h"
@@ -414,6 +415,34 @@ public:
     [[nodiscard]] QString accountProxyHostName() const;
     [[nodiscard]] int accountProxyPort() const;
 
+    /**
+     * @brief Headers the user configured to send with every request to this account's server.
+     *
+     * Like the credentials, they follow the account when its URL changes, for example after the
+     * server permanently redirected status.php.
+     */
+    [[nodiscard]] const CustomRequestHeaders &customRequestHeaders() const;
+
+    /** @brief Whether customRequestHeaders() are the headers the user configured. */
+    enum class CustomRequestHeadersStatus {
+        Ready, //!< The headers are known, which includes having none.
+        Loading, //!< The stored headers are still being read, for example from the keychain.
+        Unreadable, //!< Reading the stored headers failed, so the account has none until the user enters them again.
+    };
+    Q_ENUM(CustomRequestHeadersStatus)
+
+    [[nodiscard]] CustomRequestHeadersStatus customRequestHeadersStatus() const;
+
+    /**
+     * @brief Sets the headers together with their @p status.
+     *
+     * Connection checks wait while the status is Loading so that the first request already carries the headers.
+     */
+    void setCustomRequestHeaders(const CustomRequestHeaders &headers, CustomRequestHeadersStatus status = CustomRequestHeadersStatus::Ready);
+
+    /** @brief Adds the custom request headers to @p request if it goes to this account's server. */
+    void applyCustomRequestHeaders(QNetworkRequest &request) const;
+
     [[nodiscard]] AccountNetworkTransferLimitSetting uploadLimitSetting() const;
     void setUploadLimitSetting(AccountNetworkTransferLimitSetting setting);
 
@@ -523,6 +552,7 @@ Q_SIGNALS:
     void downloadLimitSettingChanged();
     void uploadLimitChanged();
     void downloadLimitChanged();
+    void customRequestHeadersChanged();
     void termsOfServiceNeedToBeChecked();
 
     void encryptionCertificateFingerprintChanged();
@@ -543,6 +573,7 @@ private:
     void setSharedThis(AccountPtr sharedThis);
     void updateServerColors();
     void updateProxyInUse();
+    void linkNetworkAccessManager();
 
     [[nodiscard]] static QString davPathBase();
     [[nodiscard]] QColor serverColor() const;
@@ -628,6 +659,8 @@ private:
     UpdateChannel _enterpriseUpdateChannel = UpdateChannel::Invalid;
     ServerManagedSettings _serverManagedSettings;
     QByteArray _encryptionCertificateFingerprint;
+    CustomRequestHeaders _customRequestHeaders;
+    CustomRequestHeadersStatus _customRequestHeadersStatus = CustomRequestHeadersStatus::Ready;
 
 #ifdef BUILD_FILE_PROVIDER_MODULE
     QString _fileProviderDomainIdentifier;

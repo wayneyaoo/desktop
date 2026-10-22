@@ -13,6 +13,8 @@
 #include <QStandardPaths>
 #include <QTest>
 
+#include <memory>
+
 using namespace OCC;
 using namespace Qt::StringLiterals;
 
@@ -21,6 +23,9 @@ namespace
 
 // Distinct from the default 12345 used by PushNotificationsTest, so both can run in parallel.
 constexpr quint16 webSocketPort = 12346;
+
+// Long enough for the connectivity check queued on creation to send its first request.
+constexpr auto quietPeriodMs = 1000;
 
 // Counts connectivity checks at the point where slotCheckConnection() decides to call them.
 class ConnectivityCountingAccountState : public AccountState
@@ -52,6 +57,30 @@ AccountPtr createPushAccount()
     return account;
 }
 
+// Already fetched credentials that create a new access manager each time and count all their requests.
+class RequestCountingCredentials : public FakeCredentials
+{
+public:
+    RequestCountingCredentials()
+        : FakeCredentials{nullptr}
+    {
+        _wasFetched = true;
+    }
+
+    [[nodiscard]] QNetworkAccessManager *createQNAM() const override
+    {
+        auto *const qnam = new FakeQNAM({});
+        // The access manager can outlive the credentials, so it shares the counter instead of using this.
+        qnam->setOverride(
+            [qnam, requestCount = requestCount](QNetworkAccessManager::Operation operation, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+                ++*requestCount;
+                return new FakeErrorReply(operation, request, qnam, 404);
+            });
+        return qnam;
+    }
+
+    const std::shared_ptr<int> requestCount = std::make_shared<int>(0);
+};
 }
 
 class TestAccountState : public QObject
@@ -140,6 +169,66 @@ private Q_SLOTS:
         accountState.systemOnlineConfigurationChanged();
         QCoreApplication::sendPostedEvents(&accountState, QEvent::MetaCall);
         QCOMPARE(accountState.checkConnectivityCount, checksAfterSignOut);
+    }
+
+    void waitsForCustomRequestHeadersBeforeCheckingConnectivity()
+    {
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"http://localhost"_s));
+        auto *const credentials = new RequestCountingCredentials;
+        const auto requestCount = credentials->requestCount;
+        account->setCredentials(credentials);
+        account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Loading);
+
+        // The connection validator holds a reference, so the state must be reference counted.
+        const auto accountState = AccountStatePtr(new AccountState(account));
+
+        QTest::qWait(quietPeriodMs);
+        QCOMPARE(*requestCount, 0);
+
+        account->setCustomRequestHeaders({});
+        QTRY_VERIFY(*requestCount > 0);
+    }
+
+    void failedConnectionExplainsUnreadableCustomRequestHeaders()
+    {
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"http://localhost"_s));
+        account->setCredentials(new RequestCountingCredentials);
+        account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Unreadable);
+        const auto accountState = AccountStatePtr(new AccountState(account));
+        const auto explanation = u"The custom headers couldn't be read from the keychain. Enter them again in the connection settings."_s;
+
+        QTRY_COMPARE(accountState->state(), AccountState::NetworkError);
+        QCOMPARE(accountState->connectionErrors().size(), 2);
+        QCOMPARE(accountState->connectionErrors().first(), explanation);
+
+        // Once the user entered the headers, a failure is no longer about them.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        account->setCustomRequestHeaders({});
+        QTRY_VERIFY(!accountState->connectionErrors().isEmpty());
+        QVERIFY(!accountState->connectionErrors().contains(explanation));
+    }
+
+    void changedCustomRequestHeadersReconnectConnectedAccount()
+    {
+        FakeWebSocketServer fakeServer(webSocketPort);
+        const auto account = createPushAccount();
+        ConnectivityCountingAccountState accountState(account);
+        QVERIFY(fakeServer.authenticateAccount(account));
+        QCOMPARE(accountState.state(), AccountState::Connected);
+        QCoreApplication::sendPostedEvents(&accountState, QEvent::MetaCall);
+        const auto checksWhileConnected = accountState.checkConnectivityCount;
+
+        // The connection, including the push notification socket, has to start over with the new headers.
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        account->setCustomRequestHeaders(*headers);
+        QCOMPARE(accountState.state(), AccountState::Disconnected);
+        QCOMPARE(accountState.checkConnectivityCount, checksWhileConnected + 1);
+
+        account->setCustomRequestHeaders(*headers);
+        QCOMPARE(accountState.checkConnectivityCount, checksWhileConnected + 1);
     }
 };
 

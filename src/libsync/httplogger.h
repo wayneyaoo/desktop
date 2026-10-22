@@ -11,7 +11,15 @@
 
 namespace OCC {
 namespace HttpLogger {
-    void OWNCLOUDSYNC_EXPORT logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device);
+/**
+ * @brief Logs the request and, once finished, the response of @p reply.
+ *
+ * @param redactedHeaderNames Headers whose values must not appear in the log, in addition to Authorization.
+ */
+void OWNCLOUDSYNC_EXPORT logRequest(QNetworkReply *reply,
+                                    QNetworkAccessManager::Operation operation,
+                                    QIODevice *device,
+                                    const QList<QByteArray> &redactedHeaderNames = {});
 
     /**
     * Helper to construct the HTTP verb used in the request

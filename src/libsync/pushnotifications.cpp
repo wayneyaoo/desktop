@@ -173,7 +173,9 @@ void PushNotifications::openWebSocket()
     qCInfo(lcPushNotifications) << "Open connection to websocket on" << webSocketUrl << "for account" << _account->displayName() << _account->url();
     connect(_webSocket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::errorOccurred), this, &PushNotifications::onWebSocketError);
     connect(_webSocket, &QWebSocket::sslErrors, this, &PushNotifications::onWebSocketSslErrors);
-    _webSocket->open(webSocketUrl);
+    auto request = QNetworkRequest{webSocketUrl};
+    _account->applyCustomRequestHeaders(request);
+    _webSocket->open(request);
 }
 
 void PushNotifications::setReconnectTimerInterval(uint32_t interval)

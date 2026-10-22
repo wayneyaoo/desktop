@@ -78,6 +78,39 @@ Item {
             return null
         }
 
+        function findByObjectName(item, objectName) {
+            if (item.objectName === objectName) {
+                return item
+            }
+            for (let i = 0; i < item.children.length; ++i) {
+                const found = findByObjectName(item.children[i], objectName)
+                if (found) {
+                    return found
+                }
+            }
+            return null
+        }
+
+        // Popups are not visual children of the window, so look them up among its declared objects.
+        function findPopup(wizard, objectName) {
+            for (let i = 0; i < wizard.contentData.length; ++i) {
+                if (wizard.contentData[i].objectName === objectName) {
+                    return wizard.contentData[i]
+                }
+            }
+            return null
+        }
+
+        function openCustomHeadersDialog(wizard) {
+            const button = findVisibleButton(wizard.contentItem, "Custom headers")
+            verify(button, "no visible Custom headers button")
+            button.clicked()
+            const dialog = findPopup(wizard, "customRequestHeadersDialog")
+            verify(dialog)
+            tryVerify(() => dialog.opened)
+            return dialog
+        }
+
         function relabel(wizard, text, newText) {
             const button = findVisibleButton(wizard.contentItem, text)
             verify(button, "no visible button labelled " + text)
@@ -190,6 +223,57 @@ Item {
 
             tryVerify(() => button.implicitWidth < Style.wizardInlineButtonMinimumWidth)
             tryCompare(button, "width", Style.wizardInlineButtonMinimumWidth)
+        }
+
+        function test_customHeadersDialogSubmitsEditedHeaders() {
+            const wizard = createWizard(AccountWizardController.ServerStep)
+            wizard.controller.customRequestHeadersText = "P-Access-Token: old"
+            const dialog = openCustomHeadersDialog(wizard)
+            const textArea = findByObjectName(dialog.contentItem, "customRequestHeadersTextArea")
+            verify(textArea)
+            compare(textArea.text, "P-Access-Token: old")
+
+            textArea.text = "P-Access-Token: new"
+            findVisibleButton(dialog.contentItem, "Done").clicked()
+
+            compare(wizard.controller.submittedCustomRequestHeadersText, "P-Access-Token: new")
+            tryVerify(() => !dialog.visible)
+        }
+
+        function test_customHeadersDialogStaysOpenForRejectedHeaders() {
+            const wizard = createWizard(AccountWizardController.ServerStep)
+            wizard.controller.customRequestHeadersError = "Line 1: This header is set by the client and cannot be changed."
+            const dialog = openCustomHeadersDialog(wizard)
+            const errorLabel = findByObjectName(dialog.contentItem, "customRequestHeadersErrorLabel")
+            verify(errorLabel)
+            verify(!errorLabel.visible)
+
+            findByObjectName(dialog.contentItem, "customRequestHeadersTextArea").text = "Authorization: Basic abc"
+            findVisibleButton(dialog.contentItem, "Done").clicked()
+
+            verify(dialog.visible)
+            verify(errorLabel.visible)
+            compare(errorLabel.text, wizard.controller.customRequestHeadersError)
+
+            findVisibleButton(dialog.contentItem, "Cancel").clicked()
+            tryVerify(() => !dialog.visible)
+            compare(wizard.controller.customRequestHeadersText, "")
+        }
+
+        function test_customHeadersDialogScrollsLongHeadersInsideWindow() {
+            const wizard = createWizard(AccountWizardController.ServerStep)
+            // A long token wraps into many lines.
+            wizard.controller.customRequestHeadersText = "P-Access-Token: " + "x".repeat(2000)
+            const dialog = openCustomHeadersDialog(wizard)
+            const flickable = findByObjectName(dialog.contentItem, "customRequestHeadersFlickable")
+            verify(flickable)
+
+            // Layouts apply size changes when they are polished.
+            tryVerify(() => !isPolishScheduled(dialog.contentItem))
+            verify(flickable.contentHeight > flickable.height, "the headers do not scroll")
+            const doneButton = findVisibleButton(dialog.contentItem, "Done")
+            const bottomEdge = doneButton.mapToItem(null, 0, doneButton.height).y
+            verify(bottomEdge <= wizard.height, "Done button ends at " + bottomEdge)
         }
 
         function test_overlongFooterLabelElidesInsideWindow() {

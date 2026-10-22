@@ -15,6 +15,14 @@
 
 #include <QStandardPaths>
 
+using namespace Qt::StringLiterals;
+
+namespace
+{
+// Clients of earlier tests can keep reconnecting to the default port 12345, so this one has its own.
+constexpr quint16 customRequestHeadersWebSocketPort = 12347;
+}
+
 #define RETURN_FALSE_ON_FAIL(expr) \
     if (!(expr)) {                 \
         return false;              \
@@ -325,6 +333,31 @@ private Q_SLOTS:
                 QVERIFY(verifyCalledOnceWithAccount(*notificationsChangedSpy, account));
                 QVERIFY(verifyCalledOnceWithAccount(*activitiesChangedSpy, account));
             }));
+    }
+
+    void testWebSocketHandshake_customRequestHeaders_sentToAccountServerOnly_data()
+    {
+        QTest::addColumn<QUrl>("accountUrl");
+        QTest::addColumn<QByteArray>("expectedToken");
+
+        QTest::newRow("same host and port") << QUrl(u"http://localhost:%1"_s.arg(customRequestHeadersWebSocketPort)) << "secret"_ba;
+        QTest::newRow("other port") << QUrl(u"http://localhost"_s) << QByteArray();
+    }
+
+    void testWebSocketHandshake_customRequestHeaders_sentToAccountServerOnly()
+    {
+        QFETCH(QUrl, accountUrl);
+        QFETCH(QByteArray, expectedToken);
+
+        const auto headers = OCC::CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        FakeWebSocketServer fakeServer(customRequestHeadersWebSocketPort);
+        const auto webSocketUrl = QUrl(u"ws://localhost:%1"_s.arg(customRequestHeadersWebSocketPort));
+        const auto account = FakeWebSocketServer::createAccount(u"user"_s, u"password"_s, accountUrl, webSocketUrl, *headers);
+
+        const auto socket = fakeServer.authenticateAccount(account);
+        QVERIFY(socket);
+        QCOMPARE(socket->request().rawHeader("P-Access-Token"_ba), expectedToken);
     }
 };
 

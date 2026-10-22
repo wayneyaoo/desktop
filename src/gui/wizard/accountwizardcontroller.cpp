@@ -797,6 +797,7 @@ void AccountWizardController::submitBasicAuth()
 void AccountWizardController::startServerCheck(const QUrl &serverUrl)
 {
     _account->setUrl(serverUrl);
+    _account->setCustomRequestHeaders(_customRequestHeaders);
     _account->setCredentials(CredentialsFactory::create("dummy"));
     const auto proxyType = proxySettingsAvailable() ? _proxySettings._proxyType : QNetworkProxy::NoProxy;
     _account->setProxyType(proxyType);
@@ -1016,6 +1017,27 @@ void AccountWizardController::openProxySettings()
     }
 
     Q_EMIT proxySettingsRequested();
+}
+
+QString AccountWizardController::customRequestHeadersText() const
+{
+    return _customRequestHeaders.toText();
+}
+
+QString AccountWizardController::submitCustomRequestHeaders(const QString &text)
+{
+    auto error = CustomRequestHeaders::ParseError::NoError;
+    auto errorLine = qsizetype{0};
+    const auto headers = CustomRequestHeaders::fromText(text, &error, &errorLine);
+    if (!headers) {
+        return Utility::customRequestHeadersErrorText(error, errorLine);
+    }
+
+    if (*headers != _customRequestHeaders) {
+        _customRequestHeaders = *headers;
+        Q_EMIT customRequestHeadersChanged();
+    }
+    return {};
 }
 
 void AccountWizardController::pollNow()

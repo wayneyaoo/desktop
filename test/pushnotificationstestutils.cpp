@@ -145,12 +145,15 @@ void FakeWebSocketServer::clearTextMessages()
 }
 
 OCC::AccountPtr FakeWebSocketServer::createAccount(const QString &username,
-    const QString &password,
-    const QUrl &accountUrl,
-    const QUrl &webSocketUrl)
+                                                   const QString &password,
+                                                   const QUrl &accountUrl,
+                                                   const QUrl &webSocketUrl,
+                                                   const OCC::CustomRequestHeaders &customRequestHeaders)
 {
     auto account = OCC::Account::create();
     account->setUrl(accountUrl);
+    // Setting the credentials below opens the websocket, so the headers have to be there first.
+    account->setCustomRequestHeaders(customRequestHeaders);
 
     QStringList typeList;
     typeList.append("files");
