@@ -461,6 +461,69 @@
      </item>
     </layout>
    </item>
+   <item row="3" column="0">
+    <widget class="QGroupBox" name="customRequestHeadersGroupBox">
+     <property name="title">
+      <string>Custom Headers</string>
+     </property>
+     <layout class="QVBoxLayout" name="customRequestHeadersLayout">
+      <item>
+       <widget class="QLabel" name="customRequestHeadersHintLabel">
+        <property name="text">
+         <string>Sent with every request to this account's server, for example a token for a reverse proxy. Enter one header per line as "Name: value".</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPlainTextEdit" name="customRequestHeadersTextEdit">
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>80</height>
+         </size>
+        </property>
+        <property name="placeholderText">
+         <string>X-Example-Token: value</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="customRequestHeadersErrorLabel">
+        <property name="text">
+         <string notr="true"/>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="customRequestHeadersButtonLayout">
+        <item>
+         <spacer name="customRequestHeadersButtonSpacer">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="customRequestHeadersApplyButton">
+          <property name="text">
+           <string>Apply</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
   </layout>
  </widget>
  <customwidgets>

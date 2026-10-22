@@ -9,12 +9,19 @@
 
 #include <QtTest>
 
+#include <QGroupBox>
+#include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QPushButton>
 #include <QRadioButton>
+#include <QScopeGuard>
 #include <QWidget>
 
 #include "account.h"
+#include "accountmanager.h"
 #include "configfile.h"
+#include "creds/keychainchunk.h"
 #include "foldermantestutils.h"
 #include "logger.h"
 #include "managedsettingstestutils.h"
@@ -31,6 +38,20 @@ class TestNetworkSettings : public QObject
     Q_OBJECT
 
     FolderManTestHelper helper;
+
+    //! @brief Registers @p account with AccountManager until the returned guard removes it and its saved headers.
+    static auto addAccount(const AccountPtr &account)
+    {
+        const auto accountState = AccountManager::instance()->addAccount(account);
+        return qScopeGuard([account, accountState] {
+            // Saving custom request headers wrote them to the real keychain.
+            account->setCustomRequestHeaders({});
+            AccountManager::instance()->saveAccount(account);
+            // Keychain jobs are children of the account manager until they finished.
+            QTRY_VERIFY(AccountManager::instance()->findChildren<KeychainChunk::Job *>().isEmpty());
+            AccountManager::instance()->removeAccountState(accountState);
+        });
+    }
 
 private Q_SLOTS:
     void initTestCase()
@@ -157,6 +178,124 @@ private Q_SLOTS:
         QVERIFY(systemProxyRadioButton->isChecked());
         QVERIFY(!manualProxyRadioButton->isChecked());
         QVERIFY(hostLineEdit->text().isEmpty());
+    }
+
+    void testCustomRequestHeadersAreAppliedAndSaved()
+    {
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"https://example.com"_s));
+        account->setDavUser(u"testuser"_s);
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto removeAccount = addAccount(account);
+
+        NetworkSettings settings(account);
+        const auto textEdit = settings.findChild<QPlainTextEdit *>(u"customRequestHeadersTextEdit"_s);
+        const auto applyButton = settings.findChild<QPushButton *>(u"customRequestHeadersApplyButton"_s);
+        const auto errorLabel = settings.findChild<QLabel *>(u"customRequestHeadersErrorLabel"_s);
+        QVERIFY(textEdit && applyButton && errorLabel);
+        QVERIFY(textEdit->isEnabled());
+        QVERIFY(textEdit->toPlainText().isEmpty());
+
+        textEdit->setPlainText(u"  P-Access-Token : secret \n"_s);
+        applyButton->click();
+
+        QCOMPARE(account->customRequestHeaders().toText(), u"P-Access-Token: secret"_s);
+        QCOMPARE(textEdit->toPlainText(), u"P-Access-Token: secret"_s);
+        QVERIFY(errorLabel->isHidden());
+
+        const auto config = ConfigFile::settingsWithGroup(u"Accounts"_s);
+        config->beginGroup(account->id());
+        QCOMPARE(config->value(u"customRequestHeaderNames"_s).toStringList(), QStringList{u"P-Access-Token"_s});
+    }
+
+    void testInvalidCustomRequestHeadersKeepTheAccountHeaders()
+    {
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"https://example.com"_s));
+        account->setCustomRequestHeaders(*headers);
+
+        NetworkSettings settings(account);
+        const auto textEdit = settings.findChild<QPlainTextEdit *>(u"customRequestHeadersTextEdit"_s);
+        const auto applyButton = settings.findChild<QPushButton *>(u"customRequestHeadersApplyButton"_s);
+        const auto errorLabel = settings.findChild<QLabel *>(u"customRequestHeadersErrorLabel"_s);
+        QVERIFY(textEdit && applyButton && errorLabel);
+        QCOMPARE(textEdit->toPlainText(), u"P-Access-Token: secret"_s);
+
+        textEdit->setPlainText(u"Authorization: Basic abc"_s);
+        applyButton->click();
+
+        QVERIFY(!errorLabel->isHidden());
+        QCOMPARE(errorLabel->text(), u"Line 1: This header is set by the client and cannot be changed."_s);
+        QVERIFY(account->customRequestHeaders() == *headers);
+    }
+
+    void testCustomRequestHeadersCanBeEditedOnlyAfterLoading()
+    {
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"https://example.com"_s));
+        account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Loading);
+
+        NetworkSettings settings(account);
+        const auto groupBox = settings.findChild<QGroupBox *>(u"customRequestHeadersGroupBox"_s);
+        const auto textEdit = settings.findChild<QPlainTextEdit *>(u"customRequestHeadersTextEdit"_s);
+        QVERIFY(groupBox && textEdit);
+        QVERIFY(!groupBox->isEnabled());
+
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        account->setCustomRequestHeaders(*headers);
+
+        QVERIFY(groupBox->isEnabled());
+        QCOMPARE(textEdit->toPlainText(), u"P-Access-Token: secret"_s);
+    }
+
+    void testUnreadableCustomRequestHeadersCanBeReplaced_data()
+    {
+        QTest::addColumn<QString>("text");
+        QTest::addColumn<QStringList>("expectedStoredNames");
+
+        QTest::newRow("entered again") << u"P-Access-Token: new"_s << QStringList{u"P-Access-Token"_s};
+        QTest::newRow("removed") << QString() << QStringList();
+    }
+
+    void testUnreadableCustomRequestHeadersCanBeReplaced()
+    {
+        QFETCH(QString, text);
+        QFETCH(QStringList, expectedStoredNames);
+
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"https://example.com"_s));
+        account->setDavUser(u"testuser"_s);
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        const auto removeAccount = addAccount(account);
+        const auto storedHeaders = CustomRequestHeaders::fromText(u"P-Access-Token: old"_s);
+        QVERIFY(storedHeaders);
+        account->setCustomRequestHeaders(*storedHeaders);
+        AccountManager::instance()->saveAccount(account);
+        // As after starting without a keychain.
+        account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Unreadable);
+
+        NetworkSettings settings(account);
+        const auto textEdit = settings.findChild<QPlainTextEdit *>(u"customRequestHeadersTextEdit"_s);
+        const auto applyButton = settings.findChild<QPushButton *>(u"customRequestHeadersApplyButton"_s);
+        const auto errorLabel = settings.findChild<QLabel *>(u"customRequestHeadersErrorLabel"_s);
+        QVERIFY(textEdit && applyButton && errorLabel);
+        QVERIFY(textEdit->isEnabled());
+        QVERIFY(textEdit->toPlainText().isEmpty());
+        QVERIFY(!errorLabel->isHidden());
+        QCOMPARE(errorLabel->text(), u"The stored headers couldn't be read from the keychain. Enter them again, or apply without headers to remove them."_s);
+
+        textEdit->setPlainText(text);
+        applyButton->click();
+
+        QCOMPARE(account->customRequestHeadersStatus(), Account::CustomRequestHeadersStatus::Ready);
+        QCOMPARE(account->customRequestHeaders().toText(), text);
+        QVERIFY(errorLabel->isHidden());
+        const auto config = ConfigFile::settingsWithGroup(u"Accounts"_s);
+        config->beginGroup(account->id());
+        QCOMPARE(config->value(u"customRequestHeaderNames"_s).toStringList(), expectedStoredNames);
     }
 };
 

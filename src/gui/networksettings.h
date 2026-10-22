@@ -34,6 +34,7 @@ public:
 private Q_SLOTS:
     void saveProxySettings();
     void saveBWLimitSettings();
+    void saveCustomRequestHeaders();
 
     /// Red marking of host field if empty and enabled
     void checkEmptyProxyHost();
@@ -46,6 +47,7 @@ protected:
 private:
     void loadProxySettings();
     void loadBWLimitSettings();
+    void loadCustomRequestHeaders();
 
     Ui::NetworkSettings *_ui;
     AccountPtr _account;
