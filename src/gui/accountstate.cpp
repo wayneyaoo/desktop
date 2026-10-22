@@ -56,10 +56,11 @@ AccountState::AccountState(const AccountPtr &account)
         this, &AccountState::slotCredentialsFetched);
     connect(account.data(), &Account::credentialsAsked,
         this, &AccountState::slotCredentialsAsked);
-    // Headers read at startup are checked once loading finishes.
+    // Reconnect so every connection, including the push notification socket, uses the current headers.
+    // While they are loading, the connection check waits for them instead.
     connect(account.data(), &Account::customRequestHeadersChanged, this, [this] {
         if (_account->customRequestHeadersStatus() != Account::CustomRequestHeadersStatus::Loading) {
-            checkConnectivity();
+            freshConnectionAttempt();
         }
     });
     connect(account.data(), &Account::pushNotificationsReady,

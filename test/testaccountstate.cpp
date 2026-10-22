@@ -209,6 +209,27 @@ private Q_SLOTS:
         QTRY_VERIFY(!accountState->connectionErrors().isEmpty());
         QVERIFY(!accountState->connectionErrors().contains(explanation));
     }
+
+    void changedCustomRequestHeadersReconnectConnectedAccount()
+    {
+        FakeWebSocketServer fakeServer(webSocketPort);
+        const auto account = createPushAccount();
+        ConnectivityCountingAccountState accountState(account);
+        QVERIFY(fakeServer.authenticateAccount(account));
+        QCOMPARE(accountState.state(), AccountState::Connected);
+        QCoreApplication::sendPostedEvents(&accountState, QEvent::MetaCall);
+        const auto checksWhileConnected = accountState.checkConnectivityCount;
+
+        // The connection, including the push notification socket, has to start over with the new headers.
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        account->setCustomRequestHeaders(*headers);
+        QCOMPARE(accountState.state(), AccountState::Disconnected);
+        QCOMPARE(accountState.checkConnectivityCount, checksWhileConnected + 1);
+
+        account->setCustomRequestHeaders(*headers);
+        QCOMPARE(accountState.checkConnectivityCount, checksWhileConnected + 1);
+    }
 };
 
 QTEST_MAIN(TestAccountState)
