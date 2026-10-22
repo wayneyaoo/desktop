@@ -72,6 +72,9 @@ constexpr auto webflowAuthPrefix = "webflow_";
 
 constexpr auto networkProxyPasswordKeychainKeySuffixC = "_proxy_password";
 
+constexpr auto customRequestHeaderNamesC = "customRequestHeaderNames";
+// Appended to the user like the other per-account entries, so the key can't be the one of the app password.
+constexpr auto customRequestHeadersKeychainKeySuffixC = "_custom_request_headers";
 
 // The maximum versions that this client can read
 constexpr auto maxAccountsVersion = 13;
@@ -139,6 +142,7 @@ AccountManager::AccountsRestoreResult AccountManager::restore(const bool alsoRes
                 continue;
             }
             acc->_id = accountId;
+            loadCustomRequestHeaders(acc, *settings);
             const auto accState = new AccountState(acc);
             const auto jar = qobject_cast<CookieJar*>(acc->_networkAccessManager->cookieJar());
             Q_ASSERT(jar);
@@ -465,6 +469,8 @@ void AccountManager::saveAccountHelper(const AccountPtr &account, QSettings &set
         job->start();
     }
 
+    saveCustomRequestHeaders(account, settings);
+
     if (account->_credentials) {
         if (saveCredentials) {
             // Only persist the credentials if the parameter is set, on migration from 1.8.x
@@ -515,6 +521,92 @@ void AccountManager::saveAccountHelper(const AccountPtr &account, QSettings &set
             }
         }
     }
+}
+
+namespace
+{
+QString customRequestHeadersKeychainKey(const AccountPtr &account)
+{
+    return account->davUser() + QLatin1StringView{customRequestHeadersKeychainKeySuffixC};
+}
+}
+
+void AccountManager::saveCustomRequestHeaders(const AccountPtr &account, QSettings &settings)
+{
+    // Until the stored headers were read, the account has none, so saving them would lose the stored ones.
+    // That includes a failed read, as the keychain might work again on the next start.
+    if (account->customRequestHeadersStatus() != Account::CustomRequestHeadersStatus::Ready) {
+        return;
+    }
+
+    const auto &headers = account->customRequestHeaders();
+    if (headers.isEmpty()) {
+        if (!settings.value(customRequestHeaderNamesC).toStringList().isEmpty()) {
+            settings.remove(customRequestHeaderNamesC);
+            deleteCustomRequestHeadersFromKeychain(account);
+        }
+        return;
+    }
+
+    QStringList names;
+    const auto headerNames = headers.names();
+    for (const auto &name : headerNames) {
+        names.append(QString::fromLatin1(name));
+    }
+    settings.setValue(customRequestHeaderNamesC, names);
+
+    static_assert(CustomRequestHeaders::MaximumSize <= KeychainChunk::ChunkSize, "Custom request headers must fit into a single keychain entry");
+    const auto job = new KeychainChunk::WriteJob(account.data(), customRequestHeadersKeychainKey(account), headers.toText().toUtf8(), this);
+    // The job only holds a raw pointer, so the captured account keeps it alive until the job finished.
+    connect(job, &KeychainChunk::WriteJob::finished, this, [account](const KeychainChunk::WriteJob *const incomingJob) {
+        if (incomingJob->error() == QKeychain::NoError) {
+            qCInfo(lcAccountManager) << "Saved custom request headers to keychain for" << account->displayName();
+        } else {
+            qCWarning(lcAccountManager) << "Failed to save custom request headers to keychain for" << account->displayName() << incomingJob->errorString();
+        }
+    });
+    job->start();
+}
+
+void AccountManager::loadCustomRequestHeaders(const AccountPtr &account, const QSettings &settings)
+{
+    if (settings.value(customRequestHeaderNamesC).toStringList().isEmpty()) {
+        return;
+    }
+
+    account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Loading);
+    const auto job = new KeychainChunk::ReadJob(account.data(), customRequestHeadersKeychainKey(account), false, this);
+    connect(job, &KeychainChunk::ReadJob::finished, this, [account](const KeychainChunk::ReadJob *const incomingJob) {
+        auto headers = std::optional<CustomRequestHeaders>{};
+        if (incomingJob->error() == QKeychain::NoError) {
+            headers = CustomRequestHeaders::fromText(QString::fromUtf8(incomingJob->binaryData()));
+            if (!headers) {
+                qCWarning(lcAccountManager) << "Ignoring invalid custom request headers from keychain for" << account->displayName();
+            }
+        } else {
+            qCWarning(lcAccountManager) << "Failed to read custom request headers from keychain for" << account->displayName() << incomingJob->errorString();
+        }
+
+        if (headers) {
+            account->setCustomRequestHeaders(*headers);
+        } else {
+            account->setCustomRequestHeaders({}, Account::CustomRequestHeadersStatus::Unreadable);
+        }
+    });
+    job->start();
+}
+
+void AccountManager::deleteCustomRequestHeadersFromKeychain(const AccountPtr &account)
+{
+    const auto job = new KeychainChunk::DeleteJob(account.data(), customRequestHeadersKeychainKey(account), false, this);
+    connect(job, &KeychainChunk::DeleteJob::finished, this, [account](const KeychainChunk::DeleteJob *const incomingJob) {
+        if (incomingJob->error() == QKeychain::NoError || incomingJob->error() == QKeychain::EntryNotFound) {
+            qCInfo(lcAccountManager) << "Deleted custom request headers from keychain for" << account->displayName();
+        } else {
+            qCWarning(lcAccountManager) << "Failed to delete custom request headers from keychain for" << account->displayName() << incomingJob->errorString();
+        }
+    });
+    job->start();
 }
 
 void AccountManager::migrateNetworkSettings(const AccountPtr &account, const QSettings &settings)
@@ -818,11 +910,17 @@ void AccountManager::removeAccountState(OCC::AccountState *account, AccountRemov
     }
 
     const auto settings = ConfigFile::settingsWithGroup(QLatin1String(accountsC));
+    const auto customRequestHeaderNamesKey = QString(account->account()->id() + u'/' + QLatin1StringView{customRequestHeaderNamesC});
+    const auto customRequestHeadersStored = !settings->value(customRequestHeaderNamesKey).toStringList().isEmpty();
     settings->remove(account->account()->id());
 
     if (removalMode == AccountRemovalMode::ForgetSensitiveData) {
         // Forget E2E keys
         account->account()->e2e()->forgetSensitiveData();
+
+        if (customRequestHeadersStored) {
+            deleteCustomRequestHeadersFromKeychain(account->account());
+        }
     }
 
     // clean up config from subscriptions and enterprise channel

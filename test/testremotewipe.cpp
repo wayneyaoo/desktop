@@ -10,6 +10,8 @@
 #include <qglobal.h>
 #include <QtTest>
 
+#include <memory>
+
 #include "remotewipe.h"
 #include "accountmanager.h"
 
@@ -24,6 +26,7 @@
 #include "syncenginetestutils.h"
 
 using namespace OCC;
+using namespace Qt::StringLiterals;
 
 class TestRemoteWipe: public QObject
 {
@@ -139,6 +142,41 @@ private Q_SLOTS:
         QCOMPARE(AccountManager::instance()->accounts().size(), 0);
         // local folder should now be gone
         QVERIFY2(!localFolderExists(), "Local sync folder should be removed after wiping");
+    }
+
+    void testRemoteWipeCheckSendsCustomRequestHeaders()
+    {
+        auto dir = QTemporaryDir{};
+        ConfigFile::setConfDir(dir.path());
+
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        const auto account = Account::create();
+        account->setUrl(QUrl(u"https://cloud.example"_s));
+        account->setCredentials(new FakeCredentials{new FakeQNAM({})});
+        account->setCustomRequestHeaders(*headers);
+        const auto accountState = AccountManager::instance()->addAccount(account);
+        const auto removeAccount = qScopeGuard([accountState] {
+            AccountManager::instance()->removeAccountState(accountState);
+        });
+
+        const auto remoteWipe = FakeAccountState::remoteWipe(accountState);
+        const auto fakeQnam = new FakeQNAM({});
+        fakeQnam->setParent(remoteWipe);
+        remoteWipe->_networkManager->deleteLater();
+        remoteWipe->_networkManager = fakeQnam;
+
+        // Shared, because the access manager can outlive this function.
+        const auto checkRequest = std::make_shared<QNetworkRequest>();
+        fakeQnam->setOverride([checkRequest, this](const QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *) -> QNetworkReply * {
+            *checkRequest = request;
+            return new FakeJsonReply(op, request, this, 200, QJsonDocument::fromJson(R"({"wipe": false})"));
+        });
+
+        remoteWipe->startCheckJobWithAppPassword(u"password"_s);
+
+        QTRY_VERIFY(checkRequest->url().path().endsWith(u"/index.php/core/wipe/check"_s));
+        QCOMPARE(checkRequest->rawHeader("P-Access-Token"_ba), "secret"_ba);
     }
 };
 

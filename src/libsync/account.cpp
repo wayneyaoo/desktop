@@ -1571,9 +1571,20 @@ const CustomRequestHeaders &Account::customRequestHeaders() const
     return _customRequestHeaders;
 }
 
-void Account::setCustomRequestHeaders(const CustomRequestHeaders &headers)
+Account::CustomRequestHeadersStatus Account::customRequestHeadersStatus() const
 {
+    return _customRequestHeadersStatus;
+}
+
+void Account::setCustomRequestHeaders(const CustomRequestHeaders &headers, const CustomRequestHeadersStatus status)
+{
+    if (_customRequestHeaders == headers && _customRequestHeadersStatus == status) {
+        return;
+    }
+
     _customRequestHeaders = headers;
+    _customRequestHeadersStatus = status;
+    Q_EMIT customRequestHeadersChanged();
 }
 
 void Account::applyCustomRequestHeaders(QNetworkRequest &request) const

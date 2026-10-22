@@ -62,6 +62,7 @@ void RemoteWipe::startCheckJobWithAppPassword(QString pwd)
                       "application/x-www-form-urlencoded");
     request.setUrl(requestUrl);
     request.setSslConfiguration(_account->getOrCreateSslConfig());
+    _account->applyCustomRequestHeaders(request);
     auto requestBody = new QBuffer;
     QUrlQuery arguments(QStringLiteral("token=%1").arg(_appPassword));
     requestBody->setData(arguments.query(QUrl::FullyEncoded).toLatin1());
@@ -162,6 +163,7 @@ void RemoteWipe::notifyServerSuccess()
                         "application/x-www-form-urlencoded");
     request.setUrl(requestUrl);
     request.setSslConfiguration(_account->getOrCreateSslConfig());
+    _account->applyCustomRequestHeaders(request);
     auto requestBody = new QBuffer;
     QUrlQuery arguments(QStringLiteral("token=%1").arg(_appPassword));
     requestBody->setData(arguments.query(QUrl::FullyEncoded).toLatin1());

@@ -9,6 +9,8 @@
 
 #include <QtTest>
 
+#include <QFile>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -17,6 +19,7 @@
 #include "accountmanager.h"
 #include "accountstate.h"
 #include "configfile.h"
+#include "creds/keychainchunk.h"
 #include "logger.h"
 #include "managedsettingstestutils.h"
 #include "syncenginetestutils.h"
@@ -43,6 +46,15 @@ private:
     //! @brief Creates an account with the given server URL and DAV user, registers
     //! it with AccountManager, and stores the resulting AccountState in
     //! _accountState so that cleanup() can remove it.
+    //! @brief Removes the custom request headers that saving @p account wrote to the real keychain.
+    static void forgetCustomRequestHeaders(const AccountPtr &account)
+    {
+        account->setCustomRequestHeaders({});
+        AccountManager::instance()->saveAccount(account);
+        // Keychain jobs are children of the account manager until they finished.
+        QTRY_VERIFY(AccountManager::instance()->findChildren<KeychainChunk::Job *>().isEmpty());
+    }
+
     AccountState *addTestAccount(const QString &serverUrl, const QString &davUser)
     {
         auto account = Account::create();
@@ -93,6 +105,7 @@ private Q_SLOTS:
             return std::vector<std::unique_ptr<SettingSource>>{};
         });
         if (_accountState) {
+            forgetCustomRequestHeaders(_accountState->account());
             AccountManager::instance()->removeAccountState(_accountState);
             _accountState = nullptr;
         }
@@ -342,6 +355,95 @@ private Q_SLOTS:
         }
 
         AccountManager::instance()->shutdown();
+    }
+
+    void testSaveAccountStoresCustomRequestHeaderNamesButNotValues()
+    {
+        const auto account = addTestAccount(u"https://cloud.example.com"_s, u"dave"_s)->account();
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token-Id: id\nP-Access-Token: secret-token-value"_s);
+        QVERIFY(headers);
+        account->setCustomRequestHeaders(*headers);
+
+        AccountManager::instance()->saveAccount(account);
+
+        const auto settings = ConfigFile::settingsWithGroup(u"Accounts"_s);
+        settings->beginGroup(account->id());
+        QCOMPARE(settings->value(u"customRequestHeaderNames"_s).toStringList(), (QStringList{u"P-Access-Token-Id"_s, u"P-Access-Token"_s}));
+
+        // The values belong in the keychain only.
+        QFile configFile(ConfigFile().configFile());
+        QVERIFY(configFile.open(QIODevice::ReadOnly));
+        QVERIFY(!configFile.readAll().contains("secret-token-value"));
+    }
+
+    void testSaveAccountKeepsStoredCustomRequestHeadersUntilTheyAreRead_data()
+    {
+        QTest::addColumn<Account::CustomRequestHeadersStatus>("status");
+
+        QTest::newRow("loading") << Account::CustomRequestHeadersStatus::Loading;
+        // The keychain might work again on the next start.
+        QTest::newRow("reading failed") << Account::CustomRequestHeadersStatus::Unreadable;
+    }
+
+    void testSaveAccountKeepsStoredCustomRequestHeadersUntilTheyAreRead()
+    {
+        QFETCH(Account::CustomRequestHeadersStatus, status);
+
+        const auto account = addTestAccount(u"https://cloud.example.com"_s, u"erin"_s)->account();
+        const auto headers = CustomRequestHeaders::fromText(u"P-Access-Token: secret"_s);
+        QVERIFY(headers);
+        account->setCustomRequestHeaders(*headers);
+        AccountManager::instance()->saveAccount(account);
+
+        const auto storedNames = [&account] {
+            const auto settings = ConfigFile::settingsWithGroup(u"Accounts"_s);
+            settings->beginGroup(account->id());
+            return settings->value(u"customRequestHeaderNames"_s).toStringList();
+        };
+        QCOMPARE(storedNames(), QStringList{u"P-Access-Token"_s});
+
+        // Until the headers were read, the account has none in memory but must not lose the stored ones.
+        account->setCustomRequestHeaders({}, status);
+        AccountManager::instance()->saveAccount(account);
+        QCOMPARE(storedNames(), QStringList{u"P-Access-Token"_s});
+
+        // Entering no headers removes the stored ones.
+        account->setCustomRequestHeaders({});
+        AccountManager::instance()->saveAccount(account);
+        QVERIFY(storedNames().isEmpty());
+    }
+
+    void testRestoreWaitsForCustomRequestHeadersFromKeychain()
+    {
+        AccountManager::instance()->shutdown();
+        {
+            QSettings settings(ConfigFile().configFile(), QSettings::IniFormat);
+            settings.clear();
+            settings.beginGroup(u"Accounts"_s);
+            settings.setValue(u"version"_s, accountSettingsVersion);
+            settings.beginGroup(u"0"_s);
+            settings.setValue(u"version"_s, accountSettingsVersion);
+            settings.setValue(u"url"_s, u"https://cloud.invalid"_s);
+            settings.setValue(u"authType"_s, u"dummy"_s);
+            settings.setValue(u"customRequestHeaderNames"_s, QStringList{u"P-Access-Token"_s});
+            settings.endGroup();
+            settings.endGroup();
+            settings.sync();
+        }
+        const auto shutdown = qScopeGuard([] {
+            AccountManager::instance()->shutdown();
+        });
+
+        QCOMPARE(AccountManager::instance()->restore(false), AccountManager::AccountsRestoreSuccess);
+        const auto accounts = AccountManager::instance()->accounts();
+        QCOMPARE(accounts.size(), 1);
+        const auto account = accounts.first()->account();
+        QCOMPARE(account->customRequestHeadersStatus(), Account::CustomRequestHeadersStatus::Loading);
+
+        // The test has no keychain entry, so loading has to finish without headers instead of blocking the account.
+        // On Linux the keychain read is retried once after a few seconds when no backend is available.
+        QTRY_COMPARE_WITH_TIMEOUT(account->customRequestHeadersStatus(), Account::CustomRequestHeadersStatus::Unreadable, 30000);
+        QVERIFY(account->customRequestHeaders().isEmpty());
     }
 };
 

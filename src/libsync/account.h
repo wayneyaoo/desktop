@@ -422,7 +422,23 @@ public:
      * server permanently redirected status.php.
      */
     [[nodiscard]] const CustomRequestHeaders &customRequestHeaders() const;
-    void setCustomRequestHeaders(const CustomRequestHeaders &headers);
+
+    /** @brief Whether customRequestHeaders() are the headers the user configured. */
+    enum class CustomRequestHeadersStatus {
+        Ready, //!< The headers are known, which includes having none.
+        Loading, //!< The stored headers are still being read, for example from the keychain.
+        Unreadable, //!< Reading the stored headers failed, so the account has none until the user enters them again.
+    };
+    Q_ENUM(CustomRequestHeadersStatus)
+
+    [[nodiscard]] CustomRequestHeadersStatus customRequestHeadersStatus() const;
+
+    /**
+     * @brief Sets the headers together with their @p status.
+     *
+     * Connection checks wait while the status is Loading so that the first request already carries the headers.
+     */
+    void setCustomRequestHeaders(const CustomRequestHeaders &headers, CustomRequestHeadersStatus status = CustomRequestHeadersStatus::Ready);
 
     /** @brief Adds the custom request headers to @p request if it goes to this account's server. */
     void applyCustomRequestHeaders(QNetworkRequest &request) const;
@@ -536,6 +552,7 @@ Q_SIGNALS:
     void downloadLimitSettingChanged();
     void uploadLimitChanged();
     void downloadLimitChanged();
+    void customRequestHeadersChanged();
     void termsOfServiceNeedToBeChecked();
 
     void encryptionCertificateFingerprintChanged();
@@ -643,6 +660,7 @@ private:
     ServerManagedSettings _serverManagedSettings;
     QByteArray _encryptionCertificateFingerprint;
     CustomRequestHeaders _customRequestHeaders;
+    CustomRequestHeadersStatus _customRequestHeadersStatus = CustomRequestHeadersStatus::Ready;
 
 #ifdef BUILD_FILE_PROVIDER_MODULE
     QString _fileProviderDomainIdentifier;

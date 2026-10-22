@@ -56,6 +56,12 @@ AccountState::AccountState(const AccountPtr &account)
         this, &AccountState::slotCredentialsFetched);
     connect(account.data(), &Account::credentialsAsked,
         this, &AccountState::slotCredentialsAsked);
+    // Headers read at startup are checked once loading finishes.
+    connect(account.data(), &Account::customRequestHeadersChanged, this, [this] {
+        if (_account->customRequestHeadersStatus() != Account::CustomRequestHeadersStatus::Loading) {
+            checkConnectivity();
+        }
+    });
     connect(account.data(), &Account::pushNotificationsReady,
             this, &AccountState::slotPushNotificationsReady);
     connect(account.data(), &Account::serverUserStatusChanged, this,
@@ -320,6 +326,11 @@ void AccountState::checkConnectivity()
         return;
     }
 
+    if (account()->customRequestHeadersStatus() == Account::CustomRequestHeadersStatus::Loading) {
+        qCInfo(lcAccountState) << "Waiting for custom request headers before checking connectivity of" << account()->displayName();
+        return;
+    }
+
     auto *conValidator = new ConnectionValidator(AccountStatePtr(this), _connectionErrors);
     _connectionValidator = conValidator;
     _connectionErrors.clear();
@@ -399,6 +410,10 @@ void AccountState::slotConnectionValidatorResult(ConnectionValidator::Status sta
         Q_EMIT stateChanged(_state);
     }
     _connectionErrors = errors;
+    // A reverse proxy that requires the headers may turn the account away with a misleading error.
+    if (status != ConnectionValidator::Connected && _account->customRequestHeadersStatus() == Account::CustomRequestHeadersStatus::Unreadable) {
+        _connectionErrors.prepend(tr("The custom headers couldn't be read from the keychain. Enter them again in the connection settings."));
+    }
 
     switch (status) {
     case ConnectionValidator::Connected:
