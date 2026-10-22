@@ -3,6 +3,37 @@
   - SPDX-FileCopyrightText: 2011 Nextcloud GmbH and Nextcloud contributors
   - SPDX-License-Identifier: GPL-2.0-or-later
 -->
+# Unofficial fork: custom request headers
+
+This fork lets the Nextcloud desktop client send custom HTTP headers with every request to your Nextcloud server, for example the access token of an authenticating reverse proxy. Headers can be added or changed for an existing account without logging in again. See [nextcloud/desktop#8819](https://github.com/nextcloud/desktop/issues/8819) and, for the Android app, [nextcloud/android#5821](https://github.com/nextcloud/android/issues/5821).
+
+## Using it
+
+1. Download a build:
+   1. Open the [successful builds](https://github.com/wayneyaoo/desktop/actions/workflows/custom-build-packages.yml?query=is%3Asuccess+branch%3Abuild%2Fcustom-request-headers) and click the top one, which is the latest.
+   2. At the bottom of the page under *Artifacts*, download `nextcloud-windows-msi` for Windows or `nextcloud-appimage` for Linux. Each is a zip with the installer or AppImage inside.
+   3. Downloading needs a GitHub login, and builds expire after 90 days.
+2. Install it. On Windows, the MSI replaces an installed official client and keeps your settings. It is unsigned, so choose *More info* → *Run anyway* when SmartScreen warns.
+3. Enter the headers, one `Name: value` per line:
+   - New account: *Custom headers* in the setup wizard, before logging in.
+   - Existing account: *Settings* → your account → *Connection settings* → *Custom Headers* → *Apply*.
+
+The source is on the [`feat/custom-request-headers`](https://github.com/wayneyaoo/desktop/tree/feat/custom-request-headers) branch.
+
+## Disclaimer
+
+- **Not official.** This is not a Nextcloud release and is not supported by Nextcloud.
+- **Where to report.** Report problems with this feature in [this fork's issues](https://github.com/wayneyaoo/desktop/issues), not to Nextcloud, as their client doesn't contain this code.
+- **Security.** Don't trust my builds. This client holds your credentials and files, so review [the changes against upstream](https://github.com/nextcloud/desktop/compare/master...wayneyaoo:desktop:build/custom-request-headers), including the build workflow, for example with an AI assistant. Then build it yourself: fork this repository with all branches (untick *Copy the master branch only*), enable Actions, and push a commit to `build/custom-request-headers`.
+- **Tested platforms.** It is tested only as an AppImage on Debian 13 with KDE, and on Windows 11, where it works. Other systems should work but are untested.
+- **Keychain.** Header values are stored in the system keychain, like the proxy password: Credential Manager on Windows, Keychain on macOS, KWallet on KDE or GNOME Keyring on GNOME. Without a keychain the client is designed to keep working, but this is barely tested and may behave oddly.
+- **AI-written.** The code was written with AI. I'm an engineer and followed best practices with care, but I don't know C++. Use at your own risk.
+- **Upstream.** I intend to keep this up to date with upstream, and I'm happy to work with the Nextcloud team if they want the patch. I won't push for it, as they said in the issue that it's not planned.
+- **Scope.** Requests unrelated to custom headers won't be handled. Related but non-essential changes will likely be declined too, since every extra change makes keeping up with upstream harder.
+- **Platform issues.** I'll do my best to help with platform-specific problems with this feature, but I'd encourage you to build your own fork, which AI makes cheap today. Adding more here would make it harder to keep up with upstream.
+
+---
+
 # Nextcloud Desktop Client
 
 [![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/desktop)](https://api.reuse.software/info/github.com/nextcloud/desktop)
