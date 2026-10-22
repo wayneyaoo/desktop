@@ -1,0 +1,320 @@
+# SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Fork-only workflow: builds installable packages of a custom build branch the way upstream builds them.
+# The AppImage comes from admin/linux/build-appimage.sh in upstream's CI image, and the Windows MSI from
+# upstream's release scripts in nextcloud/client-building. Signing and uploading need upstream's
+# certificate and servers, so they are off, as is the updater, so a release never replaces the build.
+name: Custom build packages
+on:
+  push:
+    branches:
+      - 'build/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    container: ghcr.io/nextcloud/continuous-integration-client-appimage-qt6:client-appimage-el9-6.11.2-4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure, compile and package
+        id: build-appimage
+        run: |
+            BUILDNR=${GITHUB_RUN_ID} VERSION_SUFFIX=custom BUILD_UPDATER=OFF DESKTOP_CLIENT_ROOT=`pwd` EXECUTABLE_NAME=nextcloud QT_BASE_DIR=/root/linux-gcc-x86_64 /bin/bash -c "./admin/linux/build-appimage.sh"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextcloud-appimage
+          path: ${{ steps.build-appimage.outputs.APPIMAGE_NAME }}
+          if-no-files-found: error
+          compression-level: 0 # squashfs is already compressed
+
+  windows-tests:
+    name: Windows tests
+    runs-on: windows-2022
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+      PYTHON_VERSION: '3.12'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Resolve Craft dependency revisions
+        id: craft-revisions
+        shell: pwsh
+        run: |
+          function configValue($key) {
+              $escapedKey = [regex]::Escape($key)
+              $matches = @(Select-String -Path "${{ env.CRAFT_MASTER_CONFIG }}" -Pattern "^\s*$escapedKey\s*=\s*(.+?)\s*$")
+              if($matches.Count -ne 1) {
+                  throw "Expected exactly one $key value in craftmaster.ini."
+              }
+              return $matches[0].Matches[0].Groups[1].Value.Trim()
+          }
+
+          $craftRevision = configValue "CraftRevision"
+          $kdeBlueprintRef = configValue "craft/craft-blueprints-kde.revision"
+          $nextcloudBlueprintRef = configValue "craft/craft-blueprints-nextcloud.revision"
+
+          function remoteRevision($repository, $ref) {
+              $revision = git ls-remote $repository $ref
+              if($LASTEXITCODE -ne 0 -or !$revision) {
+                  throw "Could not resolve $ref from $repository."
+              }
+              return ($revision -split '\s+')[0]
+          }
+
+          $kdeBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-kde.git" "refs/heads/$kdeBlueprintRef"
+          $nextcloudBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-nextcloud.git" "refs/heads/$nextcloudBlueprintRef"
+          @(
+              "kde_ref=$kdeBlueprintRef"
+              "nextcloud_ref=$nextcloudBlueprintRef"
+              "key=$craftRevision-$kdeBlueprintRevision-$nextcloudBlueprintRevision"
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore Craft dependencies
+        id: craft-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install Craft Master with Nextcloud Client Deps
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & cmd /C "git clone -q --depth=1 https://github.com/KDE/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }} 2>&1"
+
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|${{ steps.craft-revisions.outputs.kde_ref }}|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|${{ steps.craft-revisions.outputs.nextcloud_ref }}|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Save Craft dependencies
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install inkscape
+        shell: pwsh
+        run: |
+          choco install inkscape
+
+      - name: Setup PATH
+        shell: pwsh
+        run: |
+          echo "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # Same build as upstream's Windows CI.
+      - name: Compile
+        shell: pwsh
+        run: |
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --src-dir ${{ github.workspace }} nextcloud-client
+
+      - name: Run custom request header tests
+        shell: pwsh
+        env:
+          # Without a console window, Qt and QtTest write to the debugger output instead of stdout on Windows.
+          QT_FORCE_STDERR_LOGGING: '1'
+        run: |
+          cd "${{ github.workspace }}\${{ env.CRAFT_TARGET }}\build\nextcloud-client\work\build"
+          & ctest --output-on-failure --timeout 300 -R "^(CustomRequestHeadersTest|AccountTest|AccountManagerTest|AccountStateTest|AccountWizardControllerTest|AccountWizardWindowQmlTest|NetworkSettingsTest|PushNotificationsTest|RemoteWipeTest)$"
+          if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+
+  windows-msi:
+    name: Windows MSI
+    runs-on: windows-2022
+    env:
+      CRAFT_TARGET: windows-msvc2022_64-cl
+      CRAFT_MASTER_LOCATION: ${{ github.workspace }}\CraftMaster
+      CRAFT_MASTER_CONFIG: ${{ github.workspace }}\craftmaster.ini
+      PYTHON_VERSION: '3.12'
+      CLIENT_BUILDING_REVISION: 4a3f52b0b3b3259f69169230d8cd604fec1f5b14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: nextcloud/client-building
+          ref: ${{ env.CLIENT_BUILDING_REVISION }}
+          path: client-building
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Resolve Craft dependency revisions
+        id: craft-revisions
+        shell: pwsh
+        run: |
+          function configValue($key) {
+              $escapedKey = [regex]::Escape($key)
+              $matches = @(Select-String -Path "${{ env.CRAFT_MASTER_CONFIG }}" -Pattern "^\s*$escapedKey\s*=\s*(.+?)\s*$")
+              if($matches.Count -ne 1) {
+                  throw "Expected exactly one $key value in craftmaster.ini."
+              }
+              return $matches[0].Matches[0].Groups[1].Value.Trim()
+          }
+
+          $craftRevision = configValue "CraftRevision"
+          $kdeBlueprintRef = configValue "craft/craft-blueprints-kde.revision"
+          $nextcloudBlueprintRef = configValue "craft/craft-blueprints-nextcloud.revision"
+
+          function remoteRevision($repository, $ref) {
+              $revision = git ls-remote $repository $ref
+              if($LASTEXITCODE -ne 0 -or !$revision) {
+                  throw "Could not resolve $ref from $repository."
+              }
+              return ($revision -split '\s+')[0]
+          }
+
+          $kdeBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-kde.git" "refs/heads/$kdeBlueprintRef"
+          $nextcloudBlueprintRevision = remoteRevision "https://github.com/nextcloud/craft-blueprints-nextcloud.git" "refs/heads/$nextcloudBlueprintRef"
+          @(
+              "kde_ref=$kdeBlueprintRef"
+              "nextcloud_ref=$nextcloudBlueprintRef"
+              "key=$craftRevision-$kdeBlueprintRevision-$nextcloudBlueprintRevision"
+          ) | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore Craft dependencies
+        id: craft-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ env.CRAFT_MASTER_LOCATION }}
+            ${{ env.CRAFT_MASTER_CONFIG }}
+            ${{ github.workspace }}\craft-clone
+            ${{ github.workspace }}\${{ env.CRAFT_TARGET }}
+          key: ${{ runner.os }}-craft-v1-${{ env.CRAFT_TARGET }}-python-${{ env.PYTHON_VERSION }}-${{ steps.craft-revisions.outputs.key }}
+
+      - name: Install Craft Master with Nextcloud Client Deps
+        if: steps.craft-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          & cmd /C "git clone -q --depth=1 https://github.com/KDE/craftmaster.git ${{ env.CRAFT_MASTER_LOCATION }} 2>&1"
+
+          function craft() {
+              python "${{ env.CRAFT_MASTER_LOCATION }}\CraftMaster.py" --config "${{ env.CRAFT_MASTER_CONFIG }}" --target ${{ env.CRAFT_TARGET }} -c $args
+              if($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
+          }
+
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-kde.git|${{ steps.craft-revisions.outputs.kde_ref }}|"
+          craft --add-blueprint-repository "https://github.com/nextcloud/craft-blueprints-nextcloud.git|${{ steps.craft-revisions.outputs.nextcloud_ref }}|"
+          craft craft
+          craft --install-deps nextcloud-client
+
+      - name: Install inkscape
+        shell: pwsh
+        run: |
+          choco install inkscape
+
+      # Recreates the folder layout the release scripts expect, as their init.bat and README describe.
+      - name: Prepare release build layout
+        shell: pwsh
+        run: |
+          # The scripts build the client in PROJECT_PATH/desktop, which is this checkout.
+          $projectPath = Split-Path -Parent "${{ github.workspace }}"
+          if((Join-Path $projectPath "desktop") -ne "${{ github.workspace }}") {
+              throw "The checkout must be a folder named desktop."
+          }
+          $projectPath = $projectPath.Replace('\', '/')
+
+          # They expect the Craft root at C:\Nextcloud\<blueprint branch>\<target>.
+          $craftTag = (Select-String -Path "${{ env.CRAFT_MASTER_CONFIG }}" -Pattern '^\s*craft/craft-blueprints-nextcloud\.revision\s*=\s*(\S+)').Matches[0].Groups[1].Value
+          $craftParent = "C:\Nextcloud\$craftTag"
+          New-Item -ItemType Directory -Force -Path $craftParent | Out-Null
+          New-Item -ItemType Junction -Path "$craftParent\${{ env.CRAFT_TARGET }}" -Target "${{ github.workspace }}\${{ env.CRAFT_TARGET }}" | Out-Null
+
+          New-Item -ItemType Directory -Force -Path "$projectPath/deploy-extra/RelWithDebInfo/Win64" | Out-Null
+
+          # png2ico makes the high-resolution application icon. Without it, the build falls back to icotool if available.
+          New-Item -ItemType Directory -Force -Path "C:\Nextcloud\tools" | Out-Null
+          try {
+              Invoke-WebRequest -Uri "https://www.winterdrache.de/freeware/png2ico/data/png2ico-win-2002-12-08.zip" -OutFile "$env:RUNNER_TEMP\png2ico.zip" -TimeoutSec 60 -MaximumRetryCount 3 -RetryIntervalSec 10
+              Expand-Archive -Path "$env:RUNNER_TEMP\png2ico.zip" -DestinationPath "$env:RUNNER_TEMP\png2ico"
+              Copy-Item (Get-ChildItem -Recurse -Filter png2ico.exe "$env:RUNNER_TEMP\png2ico")[0].FullName "C:\Nextcloud\tools\png2ico.exe"
+          } catch {
+              Write-Host "::warning::Could not download png2ico: $_"
+          }
+
+          @(
+              "PROJECT_PATH=$projectPath"
+              "CRAFT_TAG_DESKTOP=$craftTag"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build MSI with the release scripts
+        working-directory: client-building
+        shell: bash
+        env:
+          BUILD_TARGETS: Win64
+          BUILD_INSTALLER: '0'
+          BUILD_INSTALLER_MSI: '1'
+          BUILD_UPDATER: 'OFF'
+          USE_CODE_SIGNING: '0'
+          UPLOAD_BUILD: '0'
+          # The checkout is the source to build.
+          PULL_DESKTOP: '0'
+          CHECKOUT_DESKTOP: '0'
+          VERSION_SUFFIX: custom
+          VCINSTALLDIR: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC
+        run: ./build.bat
+
+      - name: Check application icon
+        shell: pwsh
+        run: |
+          if(!(Test-Path "${{ github.workspace }}\build\src\gui\Nextcloud.ico")) {
+              throw "No application icon was generated, so the client would have none."
+          }
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextcloud-windows-msi
+          path: ${{ env.PROJECT_PATH }}/daily/*.msi
+          if-no-files-found: error
