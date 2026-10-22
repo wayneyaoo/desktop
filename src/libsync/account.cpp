@@ -307,6 +307,7 @@ void Account::setCredentials(AbstractCredentials *cred)
     // This is necessary to avoid issues with the QNAM being deleted while
     // processing slotHandleSslErrors().
     _networkAccessManager = QSharedPointer<QNetworkAccessManager>(_credentials->createQNAM(), &QObject::deleteLater);
+    linkNetworkAccessManager();
 
     if (jar) {
         _networkAccessManager->setCookieJar(jar);
@@ -450,6 +451,7 @@ void Account::resetNetworkAccessManager()
     // Use a QSharedPointer to allow locking the life of the QNAM on the stack.
     // Make it call deleteLater to make sure that we can return to any QNAM stack frames safely.
     _networkAccessManager = QSharedPointer<QNetworkAccessManager>(_credentials->createQNAM(), &QObject::deleteLater);
+    linkNetworkAccessManager();
 
     _networkAccessManager->setCookieJar(jar); // takes ownership of the old cookie jar
     _networkAccessManager->setProxy(proxy);   // Remember proxy (issue #2108)
@@ -1562,6 +1564,28 @@ QString Account::accountProxyHostName() const
 int Account::accountProxyPort() const
 {
     return _accountProxyPort;
+}
+
+const CustomRequestHeaders &Account::customRequestHeaders() const
+{
+    return _customRequestHeaders;
+}
+
+void Account::setCustomRequestHeaders(const CustomRequestHeaders &headers)
+{
+    _customRequestHeaders = headers;
+}
+
+void Account::applyCustomRequestHeaders(QNetworkRequest &request) const
+{
+    _customRequestHeaders.applyTo(request, _url);
+}
+
+void Account::linkNetworkAccessManager()
+{
+    if (const auto accessManager = qobject_cast<AccessManager *>(_networkAccessManager.data())) {
+        accessManager->setAccount(_sharedThis);
+    }
 }
 
 Account::AccountNetworkTransferLimitSetting Account::uploadLimitSetting() const

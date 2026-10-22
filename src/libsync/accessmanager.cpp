@@ -20,6 +20,8 @@
 #include "common/utility.h"
 #include "httplogger.h"
 
+#include "account.h"
+
 using namespace Qt::StringLiterals;
 
 namespace OCC {
@@ -48,6 +50,11 @@ AccessManager::AccessManager(QObject *parent)
 QByteArray AccessManager::generateRequestId()
 {
     return QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+}
+
+void AccessManager::setAccount(const QWeakPointer<Account> &account)
+{
+    _account = account;
 }
 
 QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op, const QNetworkRequest &request, QIODevice *outgoingData)
@@ -117,8 +124,14 @@ QNetworkReply *AccessManager::createRequest(QNetworkAccessManager::Operation op,
         newRequest.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     }
 
+    QList<QByteArray> redactedHeaderNames;
+    if (const auto account = _account.toStrongRef()) {
+        account->applyCustomRequestHeaders(newRequest);
+        redactedHeaderNames = account->customRequestHeaders().names();
+    }
+
     const auto reply = QNetworkAccessManager::createRequest(op, newRequest, outgoingData);
-    HttpLogger::logRequest(reply, op, outgoingData);
+    HttpLogger::logRequest(reply, op, outgoingData, redactedHeaderNames);
     QObject::connect(reply, &QNetworkReply::requestSent, reply, [reply] {
         qCInfo(lcAccessManager()) << "Request has been sent"
                                   << reply->url().toString()

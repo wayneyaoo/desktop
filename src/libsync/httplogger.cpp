@@ -9,6 +9,8 @@
 #include <QLoggingCategory>
 #include <QBuffer>
 
+#include <algorithm>
+
 namespace {
 Q_LOGGING_CATEGORY(lcNetworkHttp, "sync.httplogger", QtWarningMsg)
 
@@ -24,7 +26,20 @@ bool isTextBody(const QString &s)
     return regexp.match(s).hasMatch();
 }
 
-void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, const QString &contentType, const QList<QNetworkReply::RawHeaderPair> &header, QIODevice *device)
+bool isRedactedHeader(const QByteArray &name, const QList<QByteArray> &redactedHeaderNames)
+{
+    return std::ranges::any_of(redactedHeaderNames, [&name](const QByteArray &redactedName) {
+        return name.compare(redactedName, Qt::CaseInsensitive) == 0;
+    });
+}
+
+void logHttp(const QByteArray &verb,
+             const QString &url,
+             const QByteArray &id,
+             const QString &contentType,
+             const QList<QNetworkReply::RawHeaderPair> &header,
+             QIODevice *device,
+             const QList<QByteArray> &redactedHeaderNames)
 {
     const auto reply = qobject_cast<QNetworkReply *>(device);
     const auto contentLength = device ? device->size() : 0;
@@ -46,6 +61,8 @@ void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, c
         if (it.first == "Authorization") {
             stream << (it.second.startsWith("Bearer ") ? "Bearer" : "Basic");
             stream << " [redacted]";
+        } else if (isRedactedHeader(it.first, redactedHeaderNames)) {
+            stream << "[redacted]";
         } else {
             stream << it.second;
         }
@@ -77,7 +94,7 @@ void logHttp(const QByteArray &verb, const QString &url, const QByteArray &id, c
 
 namespace OCC {
 
-void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device)
+void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operation operation, QIODevice *device, const QList<QByteArray> &redactedHeaderNames)
 {
     const auto request = reply->request();
     if (!lcNetworkHttp().isInfoEnabled()) {
@@ -90,19 +107,21 @@ void HttpLogger::logRequest(QNetworkReply *reply, QNetworkAccessManager::Operati
         header << qMakePair(key, request.rawHeader(key));
     }
     logHttp(requestVerb(operation, request),
-        request.url().toString(),
-        request.rawHeader(XRequestId()),
-        request.header(QNetworkRequest::ContentTypeHeader).toString(),
-        header,
-        device);
+            request.url().toString(),
+            request.rawHeader(XRequestId()),
+            request.header(QNetworkRequest::ContentTypeHeader).toString(),
+            header,
+            device,
+            redactedHeaderNames);
 
-    QObject::connect(reply, &QNetworkReply::finished, reply, [reply] {
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, redactedHeaderNames] {
         logHttp(requestVerb(*reply),
-            reply->url().toString(),
-            reply->request().rawHeader(XRequestId()),
-            reply->header(QNetworkRequest::ContentTypeHeader).toString(),
-            reply->rawHeaderPairs(),
-            reply);
+                reply->url().toString(),
+                reply->request().rawHeader(XRequestId()),
+                reply->header(QNetworkRequest::ContentTypeHeader).toString(),
+                reply->rawHeaderPairs(),
+                reply,
+                redactedHeaderNames);
     });
 }
 

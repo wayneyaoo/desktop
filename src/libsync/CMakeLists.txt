@@ -64,6 +64,8 @@ set(libsync_SRCS
     logger.cpp
     accessmanager.h
     accessmanager.cpp
+    customrequestheaders.h
+    customrequestheaders.cpp
     configfile.h
     configfile.cpp
     abstractnetworkjob.h

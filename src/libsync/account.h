@@ -13,6 +13,7 @@
 #include "clientstatusreporting.h"
 #include "common/utility.h"
 #include "common/vfs.h"
+#include "customrequestheaders.h"
 #include "settings/managedproxysettings.h"
 #include "settings/servermanagedsettings.h"
 #include "syncfileitem.h"
@@ -414,6 +415,18 @@ public:
     [[nodiscard]] QString accountProxyHostName() const;
     [[nodiscard]] int accountProxyPort() const;
 
+    /**
+     * @brief Headers the user configured to send with every request to this account's server.
+     *
+     * Like the credentials, they follow the account when its URL changes, for example after the
+     * server permanently redirected status.php.
+     */
+    [[nodiscard]] const CustomRequestHeaders &customRequestHeaders() const;
+    void setCustomRequestHeaders(const CustomRequestHeaders &headers);
+
+    /** @brief Adds the custom request headers to @p request if it goes to this account's server. */
+    void applyCustomRequestHeaders(QNetworkRequest &request) const;
+
     [[nodiscard]] AccountNetworkTransferLimitSetting uploadLimitSetting() const;
     void setUploadLimitSetting(AccountNetworkTransferLimitSetting setting);
 
@@ -543,6 +556,7 @@ private:
     void setSharedThis(AccountPtr sharedThis);
     void updateServerColors();
     void updateProxyInUse();
+    void linkNetworkAccessManager();
 
     [[nodiscard]] static QString davPathBase();
     [[nodiscard]] QColor serverColor() const;
@@ -628,6 +642,7 @@ private:
     UpdateChannel _enterpriseUpdateChannel = UpdateChannel::Invalid;
     ServerManagedSettings _serverManagedSettings;
     QByteArray _encryptionCertificateFingerprint;
+    CustomRequestHeaders _customRequestHeaders;
 
 #ifdef BUILD_FILE_PROVIDER_MODULE
     QString _fileProviderDomainIdentifier;
